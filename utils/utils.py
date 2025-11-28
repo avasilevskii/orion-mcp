@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -38,20 +39,19 @@ def resolve_env_var(primary_name: str, secondary_name: str, default_value: str) 
 
     return default_value
 
-async def run_command_async(command: list[str] | str, env: Optional[dict] = None, shell: bool = False, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+async def run_command_async(command: list[str] | str, cwd: str, env: Optional[dict] = None, shell: bool = False) -> subprocess.CompletedProcess:
     """
     Run a command line tool asynchronously and return a CompletedProcess-like result.
     Args:
         command: List of command arguments or a single string for shell=True.
+        cwd: Working directory for the command. Required to ensure isolation and prevent race conditions.
         env: Optional environment variables to set for the command.
         shell: Whether to use the shell to execute the command.
-        cwd: Optional working directory for the command.
     Returns:
         A subprocess.CompletedProcess-like object with args, returncode, stdout, stderr.
     """
     print(f"Running command: {command}")
-    if cwd:
-        print(f"Working directory: {cwd}")
+    print(f"Working directory: {cwd}")
     if env is not None:
         env_vars = os.environ.copy()
         env_vars.update(env)
@@ -174,12 +174,26 @@ async def run_orion(
     }
 
     print(f"Env: {env}")
-    result = await run_command_async(command, env=env, cwd="/tmp")
-    # Log the full result for debugging
-    print(f"Orion return code: {result.returncode}")
-    print(f"Orion stdout: {result.stdout}")
-    print(f"Orion stderr: {result.stderr}")
-    return result
+    
+    # Create a unique temporary directory for this request to avoid
+    # race conditions when multiple requests run simultaneously
+    temp_dir = tempfile.mkdtemp(prefix="orion_", dir="/tmp")
+    print(f"Using temporary directory: {temp_dir}")
+    
+    try:
+        result = await run_command_async(command, env=env, cwd=temp_dir)
+        # Log the full result for debugging
+        print(f"Orion return code: {result.returncode}")
+        print(f"Orion stdout: {result.stdout}")
+        print(f"Orion stderr: {result.stderr}")
+        return result
+    finally:
+        # Clean up the temporary directory
+        try:
+            shutil.rmtree(temp_dir)
+            print(f"Cleaned up temporary directory: {temp_dir}")
+        except OSError as e:
+            print(f"Warning: Failed to clean up temporary directory {temp_dir}: {e}")
 
 
 async def summarize_result(result: subprocess.CompletedProcess, isolate: Optional[str] = None) -> dict | str:
